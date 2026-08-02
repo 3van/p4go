@@ -29,6 +29,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <p4/vararray.h>
 #include <p4/strtable.h>
 #include <p4/strarray.h>
+#include <p4/strops.h>
 #include <p4/spec.h>
 #include <p4/mapapi.h>
 #include "p4gospecmgr.h"
@@ -773,12 +774,56 @@ JoinMapApi( MapApi* m1, MapApi* m2 )
 }
 
 void
+MapApiSetCaseSensitivity( MapApi* mapapi, int mode )
+{
+    mapapi->SetCaseSensitivity( (MapCase)mode );
+}
+
+void
 MapApiInsert( MapApi* mapapi, char* lhs, char* rhs, int flag )
 {
     if( rhs && strlen( rhs ) )
         mapapi->Insert( StrRef( lhs ), StrRef( rhs ), (MapType)flag );
     else
         mapapi->Insert( StrRef( lhs ), (MapType)flag );
+}
+
+int
+MapApiInsertServerViewLine( MapApi* mapapi, char* line, Error* e )
+{
+    StrBuf storage;
+    char* words[4] = { 0 };
+    int count = StrOps::WordsQ( storage, StrRef( line ), words, 3, e );
+    if( e->Test() || count != 2 )
+        return count;
+
+    char* lhs = words[0];
+    MapType type = MapInclude;
+    switch( lhs[0] ) {
+    case '-':
+        type = MapExclude;
+        ++lhs;
+        break;
+    case '+':
+        type = MapOverlay;
+        ++lhs;
+        break;
+    case '&':
+        type = MapOneToMany;
+        ++lhs;
+        break;
+    }
+
+    MapApi::Validate( StrRef( lhs ), e );
+    if( e->Test() )
+        return count;
+
+    MapApi::Validate( StrRef( words[1] ), e );
+    if( e->Test() )
+        return count;
+
+    mapapi->Insert( StrRef( lhs ), StrRef( words[1] ), type );
+    return count;
 }
 
 void
@@ -794,9 +839,10 @@ MapApiCount( MapApi* mapapi )
 }
 
 MapApi*
-MapApiReverse( MapApi* mapapi )
+MapApiReverse( MapApi* mapapi, int caseSensitivity )
 {
     MapApi* nmap = new MapApi;
+    nmap->SetCaseSensitivity( (MapCase)caseSensitivity );
     const StrPtr* l;
     const StrPtr* r;
     MapType t;

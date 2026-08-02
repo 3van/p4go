@@ -210,10 +210,12 @@ extern "C"
     MapApi* NewMapApi();
     void FreeMapApi( MapApi* mapapi );
     MapApi* JoinMapApi( MapApi* m1, MapApi* m2 );
+    void MapApiSetCaseSensitivity( MapApi* mapapi, int mode );
     void MapApiInsert( MapApi* mapapi, char* lhs, char* rhs, int flag );
+    int MapApiInsertServerViewLine( MapApi* mapapi, char* line, Error* e );
     void MapApiClear( MapApi* mapapi );
     int MapApiCount( MapApi* mapapi );
-    MapApi* MapApiReverse( MapApi* mapapi );
+    MapApi* MapApiReverse( MapApi* mapapi, int caseSensitivity );
     char* MapApiLhs( MapApi* mapapi, int i );
     char* MapApiRhs( MapApi* mapapi, int i );
     int MapApiType( MapApi* mapapi, int i );
