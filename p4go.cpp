@@ -32,6 +32,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <p4/strops.h>
 #include <p4/spec.h>
 #include <p4/mapapi.h>
+#include <p4/msgdb.h>
 #include "p4gospecmgr.h"
 #include "p4goresult.h"
 #include "p4gomergedata.h"
@@ -788,6 +789,32 @@ MapApiInsert( MapApi* mapapi, char* lhs, char* rhs, int flag )
         mapapi->Insert( StrRef( lhs ), (MapType)flag );
 }
 
+enum { WildKinds = 12 };
+
+static int
+MapApiWildcardsMatch( const char* lhs, const char* rhs )
+{
+    const char* paths[2] = { lhs, rhs };
+    int counts[2][WildKinds] = { 0 };
+
+    for( int side = 0; side < 2; ++side ) {
+        for( const char* p = paths[side]; *p; ++p ) {
+            if( *p == '*' )
+                ++counts[side][0];
+            else if( !strncmp( p, "...", 3 ) ) {
+                ++counts[side][1];
+                p += 2;
+            } else if( p[0] == '%' && p[1] == '%' &&
+                       p[2] >= '0' && p[2] <= '9' ) {
+                ++counts[side][2 + p[2] - '0'];
+                p += 2;
+            }
+        }
+    }
+
+    return !memcmp( counts[0], counts[1], sizeof( counts[0] ) );
+}
+
 int
 MapApiInsertServerViewLine( MapApi* mapapi, char* line, Error* e )
 {
@@ -821,6 +848,11 @@ MapApiInsertServerViewLine( MapApi* mapapi, char* line, Error* e )
     MapApi::Validate( StrRef( words[1] ), e );
     if( e->Test() )
         return count;
+
+    if( !MapApiWildcardsMatch( lhs, words[1] ) ) {
+        e->Set( MsgDb::WildMismatch ) << lhs << words[1];
+        return count;
+    }
 
     mapapi->Insert( StrRef( lhs ), StrRef( words[1] ), type );
     return count;

@@ -3419,18 +3419,52 @@ func TestP4MapInsertServerViewLineRejectsInvalidInput(t *testing.T) {
 		"",
 		"//depot/only/...",
 		"//depot/one/... //client/one/... extra",
+		"//Source/*/... //Target/...",
+		"//Source/... //Target/*/...",
 	}
 	for _, line := range invalid {
 		m := newMapWithCase(t, P4MAP_CASE_SENSITIVE)
 		require.NoError(t, m.InsertServerViewLine("//depot/first/... //client/first/..."))
+		before := append([]string(nil), m.Array()...)
 		require.Error(t, m.InsertServerViewLine(line), line)
-		require.Equal(t, 1, m.Count(), line)
+		require.Equal(t, before, m.Array(), line)
 	}
 
 	m := newMapWithCase(t, P4MAP_CASE_SENSITIVE)
 	require.NoError(t, m.InsertServerViewLine("//depot/first/... //client/first/..."))
 	require.NoError(t, m.InsertServerViewLine("//depot/second/... //client/second/..."))
 	require.Equal(t, []string{"//depot/first/...", "//depot/second/..."}, []string{m.Lhs(0), m.Lhs(1)})
+}
+
+func TestP4MapInsertServerViewLineWildcardCompatibility(t *testing.T) {
+	tests := []struct {
+		name  string
+		line  string
+		valid bool
+	}{
+		{name: "reordered star and ellipsis", line: "//Source/*/... //Target/.../*", valid: true},
+		{name: "reordered positional wildcards", line: "//Source/%%0/%%1 //Target/%%1/%%0", valid: true},
+		{name: "escaped star", line: "//Source/%2A/... //Target/%2A/...", valid: true},
+		{name: "star and ellipsis", line: "//Source/* //Target/..."},
+		{name: "star and positional wildcard", line: "//Source/* //Target/%%1"},
+		{name: "zero positional wildcard and literal", line: "//Source/%%0 //Target/literal"},
+	}
+
+	for _, test := range tests {
+		m := newMapWithCase(t, P4MAP_CASE_SENSITIVE)
+		require.NoError(t, m.InsertServerViewLine("//depot/first/... //client/first/..."))
+		before := append([]string(nil), m.Array()...)
+
+		err := m.InsertServerViewLine(test.line)
+		if test.valid {
+			require.NoError(t, err, test.name)
+			require.Equal(t, len(before)+1, m.Count(), test.name)
+			continue
+		}
+
+		require.ErrorContains(t, err, "Incompatible wildcards", test.name)
+		require.Equal(t, before, m.Array(), test.name)
+	}
 }
 
 func TestJoinMapChecked(t *testing.T) {
