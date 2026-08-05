@@ -2745,6 +2745,15 @@ type NewOutputHandler struct {
 	messageOutput []P4Message
 }
 
+type reportingStatHandler struct {
+	NewOutputHandler
+}
+
+func (h *reportingStatHandler) HandleStat(dict Dictionary) P4OutputHandlerResult {
+	h.statOutput = append(h.statOutput, dict)
+	return P4OUTPUTHANDLER_REPORT
+}
+
 func (h *NewOutputHandler) HandleStat(dict Dictionary) P4OutputHandlerResult {
 	h.statOutput = append(h.statOutput, dict)
 	return P4OUTPUTHANDLER_HANDLED
@@ -2838,6 +2847,25 @@ func (s *PerforceTestSuite) TestOutputHandler() {
 	ret, err := s.p4api.Disconnect()
 	assert.True(s.T(), ret, "should disconnect")
 	assert.Nil(s.T(), err, "should disconnect")
+	s.p4api.Close()
+}
+
+func (s *PerforceTestSuite) TestOutputHandlerReportsTaggedOutput() {
+	_, err := s.p4api.Connect()
+	require.NoError(s.T(), err)
+
+	handler := &reportingStatHandler{}
+	s.p4api.SetHandler(handler)
+	results, err := s.p4api.Run("info")
+	require.NoError(s.T(), err)
+	require.Len(s.T(), handler.statOutput, 1)
+	require.Len(s.T(), results, 1)
+	require.Equal(s.T(), handler.statOutput[0], results[0])
+
+	s.p4api.SetHandler(nil)
+	connected, err := s.p4api.Disconnect()
+	require.NoError(s.T(), err)
+	require.True(s.T(), connected)
 	s.p4api.Close()
 }
 
