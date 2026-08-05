@@ -3307,3 +3307,8 @@ func (s *PerforceTestSuite) TestResolveHandlerClearThenClose() {
 func TestPerforceTestSuite(t *testing.T) {
 	suite.Run(t, new(PerforceTestSuite))
 }
+
+func TestEmptyP4APIErrorIsIgnored(t *testing.T) {
+	assert.False(t, hasP4Error(P4MESSAGE_EMPTY))
+	assert.True(t, hasP4Error(P4MESSAGE_FAILED))
+}

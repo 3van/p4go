@@ -1381,14 +1381,15 @@ func handleCError(call func(e *C.Error) interface{}) (interface{}, error) {
 	defer C.FreeError(e)
 
 	result := call(e)
+	severity := P4MessageSeverity(C.GetErrorSeverity(e))
 
-	if int(C.GetErrorCount(e)) == 0 {
+	if !hasP4Error(severity) {
 		return result, nil // No error occurred
 	}
 
 	// Process the error details
 	err := P4Message{}
-	err.severity = P4MessageSeverity(C.GetErrorSeverity(e))
+	err.severity = severity
 	ec := int(C.GetErrorCount(e))
 	err.lines = []P4MessageLine{}
 	for j := 0; j < ec; j++ {
@@ -1402,6 +1403,10 @@ func handleCError(call func(e *C.Error) interface{}) (interface{}, error) {
 	}
 
 	return result, err // Return nil for the result and the error details
+}
+
+func hasP4Error(severity P4MessageSeverity) bool {
+	return severity != P4MESSAGE_EMPTY
 }
 
 // Callbacks
