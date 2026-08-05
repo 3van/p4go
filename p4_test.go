@@ -3312,3 +3312,15 @@ func TestEmptyP4APIErrorIsIgnored(t *testing.T) {
 	assert.False(t, hasP4Error(P4MESSAGE_EMPTY))
 	assert.True(t, hasP4Error(P4MESSAGE_FAILED))
 }
+
+func TestTrustFileUsesP4TrustEnvironment(t *testing.T) {
+	trustFile := filepath.Join(t.TempDir(), "trust")
+	ticketFile := filepath.Join(t.TempDir(), "tickets")
+	t.Setenv("P4TRUST", trustFile)
+	t.Setenv("P4TICKETS", ticketFile)
+
+	p4 := New()
+	t.Cleanup(p4.Close)
+
+	assert.Equal(t, trustFile, p4.TrustFile())
+}
