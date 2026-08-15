@@ -224,8 +224,8 @@ func (p4 *P4) Close() {
 
 func (p4 *P4) Identify() string {
 	p := C.P4Identify(p4.handle)
-	ret := C.GoString(p)
-	return ret
+	defer C.free(unsafe.Pointer(p))
+	return C.GoString(p)
 }
 
 func (p4 *P4) Connect() (bool, error) {
