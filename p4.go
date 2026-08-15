@@ -224,8 +224,8 @@ func (p4 *P4) Close() {
 
 func (p4 *P4) Identify() string {
 	p := C.P4Identify(p4.handle)
-	ret := C.GoString(p)
-	return ret
+	defer C.free(unsafe.Pointer(p))
+	return C.GoString(p)
 }
 
 func (p4 *P4) Connect() (bool, error) {
@@ -273,7 +273,7 @@ func (p4 *P4) Run(cmd string, args ...string) ([]P4Result, error) {
 	rcount := int(C.ResultCount(p4.handle))
 	for i := 0; i < rcount; i++ {
 		t := C.int(0)
-		r := (*C.P4GoResult)(C.malloc(C.size_t(1)))
+		var r *C.P4GoResult
 		if C.ResultGet(p4.handle, C.int(i), &t, &r) != 0 {
 			switch P4ResultType(int(t)) {
 			case P4RESULTTYPE_STRING:
@@ -291,15 +291,12 @@ func (p4 *P4) Run(cmd string, args ...string) ([]P4Result, error) {
 				C.free(unsafe.Pointer(s))
 			case P4RESULTTYPE_DICT:
 				j := 0
-				k := (*C.char)(C.malloc(C.size_t(1)))
-				v := (*C.char)(C.malloc(C.size_t(1)))
+				var k, v *C.char
 				d := Dictionary{}
 				for C.ResultGetKeyPair(r, C.int(j), &k, &v) != 0 {
 					j++
 					d[C.GoString(k)] = C.GoString(v)
 				}
-				C.free(unsafe.Pointer(k))
-				C.free(unsafe.Pointer(v))
 				results = append(results, d)
 			case P4RESULTTYPE_SPEC:
 				// Convert spec result using SpecData API to properly handle arrays
@@ -682,18 +679,16 @@ func convertSpecDataToDict(spec *C.P4GoSpecData) Dictionary {
 			// Array element: "View[0]" -> base="View"
 			baseKey := key[:idx]
 			baseKeys[baseKey] = append(baseKeys[baseKey], key)
-		} else {
-			// Check if this is a base key that has array elements
-			hasArrayElements := false
-			for fullKey := range rawPairs {
-				if strings.HasPrefix(fullKey, key+"[") {
-					hasArrayElements = true
-					break
-				}
-			}
-			if !hasArrayElements {
-				scalarKeys[key] = rawPairs[key]
-			}
+		}
+	}
+
+	for key, val := range rawPairs {
+		if strings.Contains(key, "[") {
+			continue
+		}
+		// P4API writes an empty base key alongside the elements, so skip it
+		if _, isArray := baseKeys[key]; !isArray {
+			scalarKeys[key] = val
 		}
 	}
 
@@ -1381,14 +1376,15 @@ func handleCError(call func(e *C.Error) interface{}) (interface{}, error) {
 	defer C.FreeError(e)
 
 	result := call(e)
+	severity := P4MessageSeverity(C.GetErrorSeverity(e))
 
-	if int(C.GetErrorCount(e)) == 0 {
+	if !hasP4Error(severity) {
 		return result, nil // No error occurred
 	}
 
 	// Process the error details
 	err := P4Message{}
-	err.severity = P4MessageSeverity(C.GetErrorSeverity(e))
+	err.severity = severity
 	ec := int(C.GetErrorCount(e))
 	err.lines = []P4MessageLine{}
 	for j := 0; j < ec; j++ {
@@ -1402,6 +1398,10 @@ func handleCError(call func(e *C.Error) interface{}) (interface{}, error) {
 	}
 
 	return result, err // Return nil for the result and the error details
+}
+
+func hasP4Error(severity P4MessageSeverity) bool {
+	return severity != P4MESSAGE_EMPTY
 }
 
 // Callbacks
@@ -1553,14 +1553,11 @@ func goCallHandleStatFunction(ctx unsafe.Pointer, t *C.StrDict) C.int {
 	if handler != nil {
 		dict := Dictionary{}
 		i := 0
-		k := (*C.char)(C.malloc(C.size_t(1)))
-		v := (*C.char)(C.malloc(C.size_t(1)))
+		var k, v *C.char
 		for C.StrDictGetKeyPair(t, C.int(i), &k, &v) != 0 {
 			i++
 			dict[C.GoString(k)] = C.GoString(v)
 		}
-		C.free(unsafe.Pointer(k))
-		C.free(unsafe.Pointer(v))
 		return C.int((*handler).HandleStat(dict))
 	}
 	return C.int(0)
@@ -1572,14 +1569,11 @@ func goCallHandleSpecFunction(ctx unsafe.Pointer, t *C.P4GoSpecData) C.int {
 	if handler != nil {
 		dict := Dictionary{}
 		i := 0
-		k := (*C.char)(C.malloc(C.size_t(1)))
-		v := (*C.char)(C.malloc(C.size_t(1)))
+		var k, v *C.char
 		for C.SpecDataGetKeyPair(t, C.int(i), &k, &v) != 0 {
 			i++
 			dict[C.GoString(k)] = C.GoString(v)
 		}
-		C.free(unsafe.Pointer(k))
-		C.free(unsafe.Pointer(v))
 		return C.int((*handler).HandleSpec(dict))
 	}
 	return C.int(0)
@@ -1655,14 +1649,11 @@ func goCallSSOAuthorizeFunction(ctx unsafe.Pointer, d *C.StrDict, l C.int, r **C
 	if ssohandler != nil {
 		dict := Dictionary{}
 		i := 0
-		k := (*C.char)(C.malloc(C.size_t(1)))
-		v := (*C.char)(C.malloc(C.size_t(1)))
+		var k, v *C.char
 		for C.StrDictGetKeyPair(d, C.int(i), &k, &v) != 0 {
 			i++
 			dict[C.GoString(k)] = C.GoString(v)
 		}
-		C.free(unsafe.Pointer(k))
-		C.free(unsafe.Pointer(v))
 
 		status, ret := (*ssohandler).Authorize(dict, int(l))
 		*r = C.CString(ret)
@@ -2126,10 +2117,7 @@ func (md *P4MergeData) YourAction() *P4Message {
 }
 
 func (md *P4MergeData) String() string {
-	s := C.MergeDataGetString(md.handle)
-	r := C.GoString(s)
-	C.free(unsafe.Pointer(s))
-	return r
+	return C.GoString(C.MergeDataGetString(md.handle))
 }
 
 // P4DepotFile represents a file in the depot.
