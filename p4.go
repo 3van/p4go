@@ -679,18 +679,16 @@ func convertSpecDataToDict(spec *C.P4GoSpecData) Dictionary {
 			// Array element: "View[0]" -> base="View"
 			baseKey := key[:idx]
 			baseKeys[baseKey] = append(baseKeys[baseKey], key)
-		} else {
-			// Check if this is a base key that has array elements
-			hasArrayElements := false
-			for fullKey := range rawPairs {
-				if strings.HasPrefix(fullKey, key+"[") {
-					hasArrayElements = true
-					break
-				}
-			}
-			if !hasArrayElements {
-				scalarKeys[key] = rawPairs[key]
-			}
+		}
+	}
+
+	for key, val := range rawPairs {
+		if strings.Contains(key, "[") {
+			continue
+		}
+		// P4API writes an empty base key alongside the elements, so skip it
+		if _, isArray := baseKeys[key]; !isArray {
+			scalarKeys[key] = val
 		}
 	}
 
