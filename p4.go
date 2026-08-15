@@ -2002,10 +2002,7 @@ func (md *P4MergeData) YourAction() *P4Message {
 }
 
 func (md *P4MergeData) String() string {
-	s := C.MergeDataGetString(md.handle)
-	r := C.GoString(s)
-	C.free(unsafe.Pointer(s))
-	return r
+	return C.GoString(C.MergeDataGetString(md.handle))
 }
 
 // P4DepotFile represents a file in the depot.

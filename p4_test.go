@@ -845,6 +845,7 @@ func (h *ActionResolveHandler) Resolve(md P4MergeData) P4MergeStatus {
 		assert.Empty(h.s.T(), md.MergeAction().String(), "Unexpected merge_action: "+md.MergeAction().String())
 		assert.Equal(h.s.T(), "Branch resolve", md.ActionType().String(), "Unexpected type: "+md.ActionType().String())
 		assert.Equal(h.s.T(), 4, int(md.MergeHint()), "Unexpected merge_hint: %d", int(md.MergeHint()))
+		assert.Contains(h.s.T(), md.String(), "P4GoMergeData - Action", "Unexpected merge data string: "+md.String())
 		return md.MergeHint()
 
 	} else if md.IsContentResolve() == true {
