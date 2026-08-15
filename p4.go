@@ -1738,32 +1738,111 @@ const (
 	P4MAP_CASE_INSENSITIVE
 )
 
+const P4MAP_CASE_DEFAULT = P4MAP_CASE_INSENSITIVE
+
 type P4Map struct {
-	handle *C.MapApi
+	handle             *C.MapApi
+	caseSensitivity    P4MapCaseSensitivity
+	caseSensitivitySet bool
 }
 
 func NewMap() *P4Map {
 	p := C.NewMapApi()
-	ret := &P4Map{handle: p}
+	ret := &P4Map{handle: p, caseSensitivity: P4MAP_CASE_DEFAULT}
 	return ret
 }
 
 func (mapapi *P4Map) Close() {
+	if mapapi == nil || mapapi.handle == nil {
+		return
+	}
 	C.FreeMapApi(mapapi.handle)
+	mapapi.handle = nil
 }
 
 func JoinMap(m1 *P4Map, m2 *P4Map) *P4Map {
+	if m1 == nil || m2 == nil || m1.handle == nil || m2.handle == nil {
+		return nil
+	}
 	p := C.JoinMapApi(m1.handle, m2.handle)
-	ret := &P4Map{handle: p}
+	ret := &P4Map{handle: p, caseSensitivity: P4MAP_CASE_DEFAULT}
+	// MapApi::Join builds the result from both tables, so it only has a defined
+	// case sensitivity when the two agree.
+	if m1.caseSensitivity == m2.caseSensitivity {
+		ret.caseSensitivity = m1.caseSensitivity
+		ret.caseSensitivitySet = m1.caseSensitivitySet && m2.caseSensitivitySet
+	}
 	return ret
 }
 
+func JoinMapChecked(m1 *P4Map, m2 *P4Map) (*P4Map, error) {
+	if m1 == nil || m2 == nil {
+		return nil, errors.New("both maps are required")
+	}
+	if m1.handle == nil || m2.handle == nil {
+		return nil, errors.New("both maps must be open")
+	}
+	if !m1.caseSensitivitySet || !m2.caseSensitivitySet {
+		return nil, errors.New("both maps must have explicit case sensitivity")
+	}
+	if m1.caseSensitivity != m2.caseSensitivity {
+		return nil, errors.New("map case sensitivities do not match")
+	}
+
+	joined := JoinMap(m1, m2)
+	if joined == nil {
+		return nil, errors.New("maps could not be joined")
+	}
+	if err := joined.SetCaseSensitivity(m1.caseSensitivity); err != nil {
+		joined.Close()
+		return nil, err
+	}
+	return joined, nil
+}
+
+func (mapapi *P4Map) SetCaseSensitivity(mode P4MapCaseSensitivity) error {
+	if mapapi == nil || mapapi.handle == nil {
+		return errors.New("map must be open")
+	}
+	if mode != P4MAP_CASE_SENSITIVE && mode != P4MAP_CASE_INSENSITIVE {
+		return fmt.Errorf("invalid map case sensitivity: %d", mode)
+	}
+
+	C.MapApiSetCaseSensitivity(mapapi.handle, C.int(mode))
+	mapapi.caseSensitivity = mode
+	mapapi.caseSensitivitySet = true
+	return nil
+}
+
 func (mapapi *P4Map) Insert(lhs string, rhs string, flag P4MapType) {
+	if mapapi == nil || mapapi.handle == nil {
+		return
+	}
 	c_lhs := C.CString(lhs)
 	c_rhs := C.CString(rhs)
 	C.MapApiInsert(mapapi.handle, c_lhs, c_rhs, C.int(flag))
 	C.free(unsafe.Pointer(c_lhs))
 	C.free(unsafe.Pointer(c_rhs))
+}
+
+func (mapapi *P4Map) InsertServerViewLine(line string) error {
+	if mapapi == nil || mapapi.handle == nil {
+		return errors.New("map must be open")
+	}
+
+	cLine := C.CString(line)
+	defer C.free(unsafe.Pointer(cLine))
+
+	result, err := handleCError(func(e *C.Error) interface{} {
+		return int(C.MapApiInsertServerViewLine(mapapi.handle, cLine, e))
+	})
+	if err != nil {
+		return err
+	}
+	if result.(int) != 2 {
+		return fmt.Errorf("server view line must contain exactly two paths; got %d", result.(int))
+	}
+	return nil
 }
 
 func (mapapi *P4Map) String() string {
@@ -1796,18 +1875,44 @@ func (mapapi *P4Map) Array() []string {
 }
 
 func (mapapi *P4Map) Clear() {
+	if mapapi == nil || mapapi.handle == nil {
+		return
+	}
 	C.MapApiClear(mapapi.handle)
 }
 
 func (mapapi *P4Map) Count() int {
+	if mapapi == nil || mapapi.handle == nil {
+		return 0
+	}
 	return int(C.MapApiCount(mapapi.handle))
 }
 
 func (mapapi *P4Map) Reverse() {
-	mapapi.handle = C.MapApiReverse(mapapi.handle)
+	if mapapi == nil || mapapi.handle == nil {
+		return
+	}
+	mapapi.handle = C.MapApiReverse(mapapi.handle, C.int(mapapi.caseSensitivity))
+}
+
+func (mapapi *P4Map) ReverseChecked() error {
+	if mapapi == nil || mapapi.handle == nil {
+		return errors.New("map must be open")
+	}
+	for i := 0; i < mapapi.Count(); i++ {
+		if mapapi.Type(i) == P4MAP_ONETOMANY {
+			return errors.New("cannot reverse a one-to-many map without losing mappings")
+		}
+	}
+
+	mapapi.Reverse()
+	return nil
 }
 
 func (mapapi *P4Map) Translate(input string, dir P4MapDirection) string {
+	if mapapi == nil || mapapi.handle == nil {
+		return ""
+	}
 	s := C.CString(input)
 	res := C.MapApiTranslate(mapapi.handle, s, C.int(dir))
 	C.free(unsafe.Pointer(s))
@@ -1821,6 +1926,9 @@ func (mapapi *P4Map) Translate(input string, dir P4MapDirection) string {
 }
 
 func (mapapi *P4Map) TranslateArray(input string, dir P4MapDirection) []string {
+	if mapapi == nil || mapapi.handle == nil {
+		return []string{}
+	}
 	s := C.CString(input)
 	l := C.int(0)
 	res := C.MapApiTranslateArray(mapapi.handle, s, C.int(dir), &l)
@@ -1839,6 +1947,9 @@ func (mapapi *P4Map) TranslateArray(input string, dir P4MapDirection) []string {
 }
 
 func (mapapi *P4Map) Lhs(i int) string {
+	if mapapi == nil || mapapi.handle == nil {
+		return ""
+	}
 	res := C.MapApiLhs(mapapi.handle, C.int(i))
 	if res == nil {
 		return ""
@@ -1847,6 +1958,9 @@ func (mapapi *P4Map) Lhs(i int) string {
 }
 
 func (mapapi *P4Map) Rhs(i int) string {
+	if mapapi == nil || mapapi.handle == nil {
+		return ""
+	}
 	res := C.MapApiRhs(mapapi.handle, C.int(i))
 	if res == nil {
 		return ""
@@ -1854,6 +1968,9 @@ func (mapapi *P4Map) Rhs(i int) string {
 	return C.GoString(res)
 }
 func (mapapi *P4Map) Type(i int) P4MapType {
+	if mapapi == nil || mapapi.handle == nil {
+		return P4MAP_INCLUDE
+	}
 	return (P4MapType)(int(C.MapApiType(mapapi.handle, C.int(i))))
 }
 

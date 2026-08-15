@@ -414,7 +414,11 @@ func (s *PerforceTestSuite) enviroFilePath() string {
 // Compute the P4D parameters
 func (s *PerforceTestSuite) p4dParams() string {
 	logParam := s.logParam()
-	return fmt.Sprintf("%s -r %s -C1 -J off", logParam, s.serverRoot)
+	caseFlag := "-C1"
+	if s.testName == "TestMapWhereOracleSensitive" {
+		caseFlag = "-C0"
+	}
+	return fmt.Sprintf("%s -r %s %s -J off", logParam, s.serverRoot, caseFlag)
 }
 
 // Log parameter for P4D on Windows
@@ -3302,6 +3306,348 @@ func (s *PerforceTestSuite) TestResolveHandlerClearThenClose() {
 	p4.SetResolveHandler(handler)
 	p4.SetResolveHandler(nil)
 	p4.Close()
+}
+
+func newMapWithCase(t *testing.T, mode P4MapCaseSensitivity) *P4Map {
+	t.Helper()
+
+	m := NewMap()
+	t.Cleanup(m.Close)
+	require.NoError(t, m.SetCaseSensitivity(mode))
+	return m
+}
+
+func TestP4MapCaseSensitivity(t *testing.T) {
+	sensitive := newMapWithCase(t, P4MAP_CASE_SENSITIVE)
+	require.NoError(t, sensitive.InsertServerViewLine("//Depot/... //Client/..."))
+	require.Equal(t, "//Client/File.txt", sensitive.Translate("//Depot/File.txt", P4MAP_LEFT_RIGHT))
+	require.Empty(t, sensitive.Translate("//depot/File.txt", P4MAP_LEFT_RIGHT))
+
+	insensitive := newMapWithCase(t, P4MAP_CASE_INSENSITIVE)
+	require.NoError(t, insensitive.InsertServerViewLine("//Depot/... //Client/..."))
+	require.Equal(t, "//Client/File.txt", insensitive.Translate("//depot/File.txt", P4MAP_LEFT_RIGHT))
+
+	unset := NewMap()
+	t.Cleanup(unset.Close)
+	require.Error(t, unset.SetCaseSensitivity(P4MapCaseSensitivity(99)))
+
+	other := newMapWithCase(t, P4MAP_CASE_SENSITIVE)
+	require.NoError(t, other.InsertServerViewLine("//Client/... /Workspace/..."))
+	joined := JoinMap(sensitive, other)
+	t.Cleanup(joined.Close)
+	joined.Reverse()
+	require.Equal(t, "//Depot/File.txt", joined.Translate("/Workspace/File.txt", P4MAP_LEFT_RIGHT))
+	require.Empty(t, joined.Translate("/workspace/File.txt", P4MAP_LEFT_RIGHT))
+}
+
+func TestP4MapInsertServerViewLine(t *testing.T) {
+	tests := []struct {
+		name     string
+		line     string
+		lhs      string
+		rhs      string
+		mapType  P4MapType
+		input    string
+		expected string
+	}{
+		{
+			name:     "quoted spaces",
+			line:     `"//depot/space dir/..." "//client/space dir/..."`,
+			lhs:      "//depot/space dir/...",
+			rhs:      "//client/space dir/...",
+			mapType:  P4MAP_INCLUDE,
+			input:    "//depot/space dir/file.txt",
+			expected: "//client/space dir/file.txt",
+		},
+		{
+			name:     "overlay",
+			line:     "+//depot/overlay/... //client/overlay/...",
+			lhs:      "//depot/overlay/...",
+			rhs:      "//client/overlay/...",
+			mapType:  P4MAP_OVERLAY,
+			input:    "//depot/overlay/file.txt",
+			expected: "//client/overlay/file.txt",
+		},
+		{
+			name:     "one to many",
+			line:     "&//depot/shared/... //client/shared/...",
+			lhs:      "//depot/shared/...",
+			rhs:      "//client/shared/...",
+			mapType:  P4MAP_ONETOMANY,
+			input:    "//depot/shared/file.txt",
+			expected: "//client/shared/file.txt",
+		},
+		{
+			name:     "wildcard",
+			line:     "//depot/*/... //client/*/...",
+			lhs:      "//depot/*/...",
+			rhs:      "//client/*/...",
+			mapType:  P4MAP_INCLUDE,
+			input:    "//depot/main/src/file.txt",
+			expected: "//client/main/src/file.txt",
+		},
+		{
+			name:     "escaped reserved characters",
+			line:     "//depot/a%40b%23c%2Ad%25e/... //client/a%40b%23c%2Ad%25e/...",
+			lhs:      "//depot/a%40b%23c%2Ad%25e/...",
+			rhs:      "//client/a%40b%23c%2Ad%25e/...",
+			mapType:  P4MAP_INCLUDE,
+			input:    "//depot/a%40b%23c%2Ad%25e/file.txt",
+			expected: "//client/a%40b%23c%2Ad%25e/file.txt",
+		},
+	}
+
+	for _, test := range tests {
+		m := newMapWithCase(t, P4MAP_CASE_SENSITIVE)
+		require.NoError(t, m.InsertServerViewLine(test.line), test.name)
+		require.Equal(t, 1, m.Count(), test.name)
+		require.Equal(t, test.lhs, m.Lhs(0), test.name)
+		require.Equal(t, test.rhs, m.Rhs(0), test.name)
+		require.Equal(t, test.mapType, m.Type(0), test.name)
+		require.Equal(t, test.expected, m.Translate(test.input, P4MAP_LEFT_RIGHT), test.name)
+	}
+
+	excluded := newMapWithCase(t, P4MAP_CASE_SENSITIVE)
+	require.NoError(t, excluded.InsertServerViewLine("//depot/... //client/..."))
+	require.NoError(t, excluded.InsertServerViewLine(`"-//depot/private dir/..." "//client/private dir/..."`))
+	require.Empty(t, excluded.Translate("//depot/private dir/file.txt", P4MAP_LEFT_RIGHT))
+	require.Equal(t, P4MAP_EXCLUDE, excluded.Type(excluded.Count()-1))
+}
+
+func TestP4MapInsertServerViewLineRejectsInvalidInput(t *testing.T) {
+	invalid := []string{
+		"",
+		"//depot/only/...",
+		"//depot/one/... //client/one/... extra",
+		"//Source/*/... //Target/...",
+		"//Source/... //Target/*/...",
+	}
+	for _, line := range invalid {
+		m := newMapWithCase(t, P4MAP_CASE_SENSITIVE)
+		require.NoError(t, m.InsertServerViewLine("//depot/first/... //client/first/..."))
+		before := append([]string(nil), m.Array()...)
+		require.Error(t, m.InsertServerViewLine(line), line)
+		require.Equal(t, before, m.Array(), line)
+	}
+
+	m := newMapWithCase(t, P4MAP_CASE_SENSITIVE)
+	require.NoError(t, m.InsertServerViewLine("//depot/first/... //client/first/..."))
+	require.NoError(t, m.InsertServerViewLine("//depot/second/... //client/second/..."))
+	require.Equal(t, []string{"//depot/first/...", "//depot/second/..."}, []string{m.Lhs(0), m.Lhs(1)})
+}
+
+func TestP4MapInsertServerViewLineWildcardCompatibility(t *testing.T) {
+	tests := []struct {
+		name  string
+		line  string
+		valid bool
+	}{
+		{name: "reordered star and ellipsis", line: "//Source/*/... //Target/.../*", valid: true},
+		{name: "reordered positional wildcards", line: "//Source/%%0/%%1 //Target/%%1/%%0", valid: true},
+		{name: "escaped star", line: "//Source/%2A/... //Target/%2A/...", valid: true},
+		{name: "star and ellipsis", line: "//Source/* //Target/..."},
+		{name: "star and positional wildcard", line: "//Source/* //Target/%%1"},
+		{name: "zero positional wildcard and literal", line: "//Source/%%0 //Target/literal"},
+	}
+
+	for _, test := range tests {
+		m := newMapWithCase(t, P4MAP_CASE_SENSITIVE)
+		require.NoError(t, m.InsertServerViewLine("//depot/first/... //client/first/..."))
+		before := append([]string(nil), m.Array()...)
+
+		err := m.InsertServerViewLine(test.line)
+		if test.valid {
+			require.NoError(t, err, test.name)
+			require.Equal(t, len(before)+1, m.Count(), test.name)
+			continue
+		}
+
+		require.ErrorContains(t, err, "Incompatible wildcards", test.name)
+		require.Equal(t, before, m.Array(), test.name)
+	}
+}
+
+func TestJoinMapChecked(t *testing.T) {
+	left := newMapWithCase(t, P4MAP_CASE_INSENSITIVE)
+	right := newMapWithCase(t, P4MAP_CASE_INSENSITIVE)
+	require.NoError(t, left.InsertServerViewLine("//Depot/... //Client/..."))
+	require.NoError(t, right.InsertServerViewLine("//Client/... /Workspace/..."))
+
+	joined, err := JoinMapChecked(left, right)
+	require.NoError(t, err)
+	t.Cleanup(joined.Close)
+	require.Equal(t, "/Workspace/File.txt", joined.Translate("//depot/File.txt", P4MAP_LEFT_RIGHT))
+
+	require.NoError(t, joined.ReverseChecked())
+	require.Equal(t, "//Depot/File.txt", joined.Translate("/workspace/File.txt", P4MAP_LEFT_RIGHT))
+
+	sensitive := newMapWithCase(t, P4MAP_CASE_SENSITIVE)
+	_, err = JoinMapChecked(left, sensitive)
+	require.ErrorContains(t, err, "do not match")
+
+	unset := NewMap()
+	t.Cleanup(unset.Close)
+	_, err = JoinMapChecked(left, unset)
+	require.ErrorContains(t, err, "explicit case sensitivity")
+	_, err = JoinMapChecked(nil, right)
+	require.ErrorContains(t, err, "required")
+}
+
+func requireMapIsInert(t *testing.T, m *P4Map) {
+	t.Helper()
+
+	require.Zero(t, m.Count())
+	require.Empty(t, m.Array())
+	require.Empty(t, m.String())
+	require.Empty(t, m.Translate("//depot/file.txt", P4MAP_LEFT_RIGHT))
+	require.Empty(t, m.TranslateArray("//depot/file.txt", P4MAP_LEFT_RIGHT))
+	require.Empty(t, m.Lhs(0))
+	require.Empty(t, m.Rhs(0))
+	m.Insert("//a/...", "//b/...", P4MAP_INCLUDE)
+	m.Clear()
+	m.Reverse()
+	require.Zero(t, m.Count())
+	require.Nil(t, JoinMap(m, m))
+}
+
+func TestP4MapCheckedAPIsRejectNilAndClosedMaps(t *testing.T) {
+	var nilMap *P4Map
+	nilMap.Close()
+	require.Error(t, nilMap.SetCaseSensitivity(P4MAP_CASE_SENSITIVE))
+	require.Error(t, nilMap.InsertServerViewLine("//depot/... //client/..."))
+	require.ErrorContains(t, nilMap.ReverseChecked(), "open")
+	requireMapIsInert(t, nilMap)
+
+	closed := NewMap()
+	require.NoError(t, closed.SetCaseSensitivity(P4MAP_CASE_SENSITIVE))
+	require.NoError(t, closed.InsertServerViewLine("//depot/... //client/..."))
+	closed.Close()
+	require.Nil(t, closed.handle)
+	closed.Close()
+	require.Error(t, closed.SetCaseSensitivity(P4MAP_CASE_INSENSITIVE))
+	require.Error(t, closed.InsertServerViewLine("//other/... //other-client/..."))
+	require.ErrorContains(t, closed.ReverseChecked(), "open")
+	requireMapIsInert(t, closed)
+
+	open := newMapWithCase(t, P4MAP_CASE_SENSITIVE)
+	require.NoError(t, open.InsertServerViewLine("//source/... //target/..."))
+	before := append([]string(nil), open.Array()...)
+	joined, err := JoinMapChecked(open, closed)
+	require.ErrorContains(t, err, "open")
+	require.Nil(t, joined)
+	require.Equal(t, before, open.Array())
+
+	joined, err = JoinMapChecked(nil, open)
+	require.ErrorContains(t, err, "required")
+	require.Nil(t, joined)
+	require.Equal(t, before, open.Array())
+}
+
+func TestP4MapReverseCheckedRejectsOneToMany(t *testing.T) {
+	m := newMapWithCase(t, P4MAP_CASE_INSENSITIVE)
+	require.NoError(t, m.InsertServerViewLine("&//Depot/shared/... //Client/one/..."))
+	require.NoError(t, m.InsertServerViewLine("&//Depot/shared/... //Client/two/..."))
+	before := append([]string(nil), m.Array()...)
+
+	require.ErrorContains(t, m.ReverseChecked(), "one-to-many")
+	require.Equal(t, before, m.Array())
+	require.ElementsMatch(t, []string{
+		"//Client/one/File.txt",
+		"//Client/two/File.txt",
+	}, m.TranslateArray("//depot/shared/File.txt", P4MAP_LEFT_RIGHT))
+}
+
+func (s *PerforceTestSuite) TestMapWhereOracle() {
+	s.testMapWhereOracle(P4MAP_CASE_INSENSITIVE)
+}
+
+func (s *PerforceTestSuite) TestMapWhereOracleSensitive() {
+	s.testMapWhereOracle(P4MAP_CASE_SENSITIVE)
+}
+
+func (s *PerforceTestSuite) testMapWhereOracle(mode P4MapCaseSensitivity) {
+	s.createClient()
+	sensitive, err := s.p4api.ServerCaseSensitive()
+	s.Require().NoError(err)
+	s.Equal(mode == P4MAP_CASE_SENSITIVE, sensitive)
+
+	client, err := s.p4api.RunFetch("client")
+	s.Require().NoError(err)
+	clientName := client["Client"].(string)
+	expectedView := []string{
+		`"//depot/space dir/..." "//` + clientName + `/space dir/..."`,
+		"//depot/main/* //" + clientName + "/main/*",
+		"//depot/private/... //" + clientName + "/private/...",
+		"-//depot/private/blocked/... //" + clientName + "/private/blocked/...",
+		"+//depot/overlay/... //" + clientName + "/overlay-copy/...",
+		"//depot/a%40b%23c%2Ad%25e/... //" + clientName + "/a%40b%23c%2Ad%25e/...",
+	}
+	client["View"] = expectedView
+	_, err = s.p4api.RunSave("client", client)
+	s.Require().NoError(err)
+
+	fetched, err := s.p4api.RunFetch("client")
+	s.Require().NoError(err)
+	view := fetched["View"].([]string)
+	s.Require().Equal(expectedView, view)
+	s.Require().True(strings.HasPrefix(view[0], `"`))
+
+	clientMap := newMapWithCase(s.T(), mode)
+	for _, line := range view {
+		s.Require().NoError(clientMap.InsertServerViewLine(line))
+	}
+	foundExclude := false
+	foundOverlay := false
+	for i := 0; i < clientMap.Count(); i++ {
+		foundExclude = foundExclude || clientMap.Type(i) == P4MAP_EXCLUDE
+		foundOverlay = foundOverlay || clientMap.Type(i) == P4MAP_OVERLAY
+	}
+	s.True(foundExclude)
+	s.True(foundOverlay)
+	rootMap := newMapWithCase(s.T(), mode)
+	rootMap.Insert("//"+clientName+"/...", filepath.ToSlash(s.clientRoot)+"/...", P4MAP_INCLUDE)
+	joined, err := JoinMapChecked(clientMap, rootMap)
+	s.Require().NoError(err)
+	defer joined.Close()
+
+	oracles := []struct {
+		depotPath    string
+		compareLocal bool
+	}{
+		{depotPath: "//depot/space dir/file.txt", compareLocal: true},
+		{depotPath: "//depot/main/file.txt", compareLocal: true},
+		{depotPath: "//depot/private/allowed.txt", compareLocal: true},
+		{depotPath: "//depot/overlay/file.txt", compareLocal: true},
+		{depotPath: "//depot/a%40b%23c%2Ad%25e/file.txt"},
+	}
+	for _, oracle := range oracles {
+		results, err := s.p4api.Run("where", oracle.depotPath)
+		s.Require().NoError(err)
+		s.Require().NotEmpty(results)
+		where, ok := results[0].(Dictionary)
+		s.Require().True(ok)
+		s.Equal(where["clientFile"], clientMap.Translate(oracle.depotPath, P4MAP_LEFT_RIGHT))
+		if oracle.compareLocal {
+			s.Equal(filepath.ToSlash(where["path"].(string)), joined.Translate(oracle.depotPath, P4MAP_LEFT_RIGHT))
+		} else {
+			s.Contains(where["path"], "a@b#c*d%e")
+			s.Contains(joined.Translate(oracle.depotPath, P4MAP_LEFT_RIGHT), "a%40b%23c%2Ad%25e")
+		}
+	}
+
+	results, err := s.p4api.Run("where", "//depot/private/blocked/file.txt")
+	s.Require().NoError(err)
+	s.Require().NotEmpty(results)
+	where, ok := results[0].(Dictionary)
+	s.Require().True(ok)
+	s.Contains(where, "unmap")
+	s.Empty(clientMap.Translate("//depot/private/blocked/file.txt", P4MAP_LEFT_RIGHT))
+
+	if sensitive {
+		_, err = s.p4api.Run("where", "//DEPOT/main/file.txt")
+		s.Require().Error(err)
+		s.Empty(clientMap.Translate("//DEPOT/main/file.txt", P4MAP_LEFT_RIGHT))
+	}
 }
 
 func TestPerforceTestSuite(t *testing.T) {
