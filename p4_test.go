@@ -28,6 +28,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 package p4
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"os"
@@ -948,6 +949,105 @@ func (h *BinaryResolveHandler) Resolve(md P4MergeData) P4MergeStatus {
 		assert.Fail(h.s.T(), "Unknown resolve type scheduled")
 	}
 	return 1
+}
+
+func (s *PerforceTestSuite) TestSetInputBytesPreservesBinaryAttributeBytes() {
+	assert.NotNil(s.T(), s.p4api, "Failed to create Perforce client")
+
+	s.createClient()
+
+	const filePath = "binary_input.txt"
+	const revision = "//depot/binary_input.txt#1"
+	const attributeName = "binary_input"
+
+	err := os.WriteFile(filePath, []byte("binary input test\n"), 0644)
+	require.NoError(s.T(), err, "Failed to create binary input test file")
+	_, err = s.p4api.Run("add", filePath)
+	require.NoError(s.T(), err, "Failed to add binary input test file")
+	_, err = s.p4api.RunSubmit("-d", "Add binary input test file")
+	require.NoError(s.T(), err, "Failed to submit binary input test file")
+
+	payload := make([]byte, 320*1024)
+	for i := range payload {
+		payload[i] = byte(i)
+	}
+	payload[0] = 0x7f
+	payload[7] = 0
+
+	s.p4api.SetInputBytes(payload)
+	_, err = s.p4api.Run("attribute", "-f", "-i", "-n", attributeName, revision)
+	require.NoError(s.T(), err, "Failed to set binary revision attribute")
+
+	readAttribute := func() []byte {
+		results, err := s.p4api.Run("print", "-q", "-T", attributeName, revision)
+		require.NoError(s.T(), err, "Failed to read binary revision attribute")
+		actual := make([]byte, 0, len(payload))
+		for _, result := range results {
+			if data, ok := result.(P4Data); ok {
+				actual = append(actual, []byte(data)...)
+			}
+		}
+		return actual
+	}
+
+	actual := readAttribute()
+	require.Equal(s.T(), len(payload), len(actual), "Binary revision attribute length changed")
+	if !bytes.Equal(payload, actual) {
+		for i := range payload {
+			if payload[i] != actual[i] {
+				require.Equal(s.T(), payload[i], actual[i], "Binary revision attribute byte changed at offset %d", i)
+			}
+		}
+	}
+	require.True(s.T(), bytes.Equal(payload, actual), "Binary revision attribute bytes changed")
+
+	s.p4api.SetInputBytes([]byte{})
+	_, err = s.p4api.Run("attribute", "-f", "-i", "-n", attributeName, revision)
+	require.NoError(s.T(), err, "Failed to clear binary revision attribute")
+	results, err := s.p4api.Run("print", "-q", "-T", attributeName, revision)
+	if err != nil {
+		require.Contains(s.T(), err.Error(), "no such attribute", "Failed to inspect cleared binary revision attribute")
+	}
+	for _, result := range results {
+		if data, ok := result.(P4Data); ok {
+			require.Empty(s.T(), data, "Empty binary input reused the previous value")
+		}
+	}
+}
+
+func (s *PerforceTestSuite) TestSetInputBytesKeepsVariadicInputsSeparate() {
+	assert.NotNil(s.T(), s.p4api, "Failed to create Perforce client")
+
+	s.createClient()
+
+	const user = "binary_input_user"
+	userSpec, err := s.p4api.RunFetch("user", user)
+	require.NoError(s.T(), err, "Failed to fetch binary input test user")
+	_, err = s.p4api.RunSave("user", userSpec, "-f")
+	require.NoError(s.T(), err, "Failed to create binary input test user")
+
+	password := []byte("P4Go!Bytes99")
+	s.p4api.SetInputBytes(password, password)
+	_, err = s.p4api.Run("passwd", user)
+	require.NoError(s.T(), err, "Variadic binary inputs did not satisfy separate password prompts")
+	_, err = s.p4api.RunSave("user", userSpec, "-f")
+	require.NoError(s.T(), err, "Failed to clear password reset for binary input test user")
+
+	userP4 := New()
+	defer userP4.Close()
+	_, _ = userP4.SetCharset("none")
+	userP4.SetPort(s.p4Port)
+	userP4.SetUser(user)
+	userP4.SetPassword(string(password))
+	_, err = userP4.Connect()
+	require.NoError(s.T(), err, "Failed to connect as binary input test user")
+	_, err = userP4.RunLogin()
+	require.NoError(s.T(), err, "Failed to log in as binary input test user")
+
+	replacement := []byte("P4Go!Next99")
+	userP4.SetInputBytes(password, []byte{}, replacement, replacement)
+	_, err = userP4.Run("passwd")
+	require.Error(s.T(), err, "Empty binary input did not retain its queue position")
 }
 
 func (s *PerforceTestSuite) TestResolve() {
@@ -3306,4 +3406,10 @@ func (s *PerforceTestSuite) TestResolveHandlerClearThenClose() {
 
 func TestPerforceTestSuite(t *testing.T) {
 	suite.Run(t, new(PerforceTestSuite))
+}
+
+func TestP4InputLengthRejectsOverflow(t *testing.T) {
+	require.Panics(t, func() {
+		p4InputLength(uint64(^uint32(0)) + 1)
+	})
 }

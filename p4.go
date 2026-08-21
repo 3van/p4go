@@ -648,6 +648,28 @@ func (p4 *P4) SetInput(input ...string) {
 	}
 }
 
+func (p4 *P4) SetInputBytes(input ...[]byte) {
+	C.ResetInput(p4.handle)
+	for _, in := range input {
+		if len(in) == 0 {
+			C.AppendInputBytes(p4.handle, nil, 0)
+			continue
+		}
+
+		length := p4InputLength(uint64(len(in)))
+		cIn := C.CBytes(in)
+		C.AppendInputBytes(p4.handle, (*C.char)(cIn), length)
+		C.free(cIn)
+	}
+}
+
+func p4InputLength(length uint64) C.uint {
+	if length > uint64(^uint32(0)) {
+		panic("P4 input exceeds P4API's 32-bit length limit")
+	}
+	return C.uint(length)
+}
+
 // convertSpecDataToDict converts a P4GoSpecData pointer to a Dictionary
 // handling both scalar values and arrays properly
 func convertSpecDataToDict(spec *C.P4GoSpecData) Dictionary {

@@ -157,6 +157,11 @@ class P4GoClientApi
 
     void AppendInput( char* input ) { ui.AppendInput( input ); }
 
+    void AppendInputBytes( const char* input, unsigned int length )
+    {
+        ui.AppendInputBytes( input, length );
+    }
+
     // Result handling
     P4GoResults* GetResults() { return ui.GetResults(); }
 
