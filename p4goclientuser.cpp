@@ -746,6 +746,19 @@ P4GoClientUser::AppendInput( char* i )
     input->Put()->Set( i );
 }
 
+void
+P4GoClientUser::AppendInputBytes( const char* i, unsigned int length )
+{
+    if( P4GODB_CALLS )
+        fprintf( stderr, "[P4] AppendInputBytes()\n" );
+
+    StrBuf* value = input->Put();
+    if( length )
+        value->Set( i, length );
+    else
+        value->Clear();
+}
+
 /*
  * Set the Handler object. Double-check that it is either nil or
  * an instance of OutputHandler to avoid future problems

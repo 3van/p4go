@@ -146,6 +146,7 @@ class P4GoClientUser
 
     void ResetInput();
     void AppendInput( char* input );
+    void AppendInputBytes( const char* input, unsigned int length );
 
     void SetCommand( const char* c ) { cmd = c; }
 

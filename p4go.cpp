@@ -128,7 +128,8 @@ ResultGetBinary( P4GoResult* ret, int* len )
 {
     if( ret->type == BINARY ) {
         char* r = (char*)malloc( ret->str->Length() + 1 );
-        strcpy( r, ret->str->Text() );
+        memcpy( r, ret->str->Text(), ret->str->Length() );
+        r[ret->str->Length()] = '\0';
         *len = ret->str->Length();
         return r;
     }
@@ -514,6 +515,14 @@ void
 AppendInput( P4GoClientApi* api, char* input )
 {
     api->AppendInput( input );
+}
+
+void
+AppendInputBytes( P4GoClientApi* api,
+                  const char* input,
+                  unsigned int length )
+{
+    api->AppendInputBytes( input, length );
 }
 
 P4GoSpecData*

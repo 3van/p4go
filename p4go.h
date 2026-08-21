@@ -126,6 +126,9 @@ extern "C"
 
     void ResetInput( P4GoClientApi* api );
     void AppendInput( P4GoClientApi* api, char* input );
+    void AppendInputBytes( P4GoClientApi* api,
+                           const char* input,
+                           unsigned int length );
 
     P4GoSpecData* ParseSpec( P4GoClientApi* api, char* spec, char* form, Error* e );
     char* FormatSpec( P4GoClientApi* api, char* spec, StrDict* dict, Error* e );
