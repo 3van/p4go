@@ -362,6 +362,8 @@ P4GoClientUser::ProcessOutput( StrDict* data )
     if( this->handler ) {
         if( CallOutputMethod( data ) )
             results.AddOutput( data );
+        else
+            delete data;
     } else
         results.AddOutput( data );
 }
