@@ -83,6 +83,18 @@ P4Disconnect( P4GoClientApi* api, Error* e )
 }
 
 void
+PrepareRun( P4GoClientApi* api )
+{
+    api->PrepareRun();
+}
+
+void
+CancelRun( P4GoClientApi* api )
+{
+    api->CancelRun();
+}
+
+void
 Run( P4GoClientApi* api, char* cmd, int argc, char** argv, Error* e )
 {
     api->Run( cmd, argc, argv, e );

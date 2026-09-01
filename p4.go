@@ -29,6 +29,7 @@ package p4
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -252,6 +253,49 @@ func (p4 *P4) Disconnect() (bool, error) {
 type Dictionary map[string]interface{}
 
 func (p4 *P4) Run(cmd string, args ...string) ([]P4Result, error) {
+	C.PrepareRun(p4.handle)
+	return p4.run(cmd, args...)
+}
+
+func (p4 *P4) RunContext(ctx context.Context, cmd string, args ...string) ([]P4Result, error) {
+	var results []P4Result
+	err := runWithContext(ctx, func() error {
+		C.PrepareRun(p4.handle)
+		var err error
+		results, err = p4.run(cmd, args...)
+		return err
+	}, func() {
+		C.CancelRun(p4.handle)
+	})
+	return results, err
+}
+
+func runWithContext(ctx context.Context, run func() error, cancel func()) error {
+	if ctx == nil {
+		return errors.New("nil context")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	finished := make(chan struct{})
+	watcherDone := make(chan struct{})
+	go func() {
+		defer close(watcherDone)
+		select {
+		case <-ctx.Done():
+			cancel()
+		case <-finished:
+		}
+	}()
+
+	runErr := run()
+	close(finished)
+	<-watcherDone
+	return errors.Join(runErr, ctx.Err())
+}
+
+func (p4 *P4) run(cmd string, args ...string) ([]P4Result, error) {
 	c_cmd := C.CString(cmd)
 
 	argc := len(args)

@@ -152,6 +152,8 @@ class P4GoClientApi
 
     // Executing commands.
     P4GoResults* Run( const char* cmd, int argc, char* const* argv, Error* e );
+    void PrepareRun() { ui.PrepareRun(); }
+    void CancelRun() { ui.CancelRun(); }
 
     void ResetInput() { ui.ResetInput(); }
 

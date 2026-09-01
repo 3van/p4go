@@ -25,6 +25,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 *******************************************************************************/
 
+#include <atomic>
+
 class P4GoSpecMgr;
 class ClientProgress;
 
@@ -157,6 +159,8 @@ class P4GoClientUser
 
     int ErrorCount();
     void Reset();
+    void PrepareRun() { alive.store( 1 ); }
+    void CancelRun() { alive.store( 0 ); }
 
     // Debugging support
     void SetDebug( int d ) { debug = d; }
@@ -180,7 +184,7 @@ class P4GoClientUser
     P4GoResolveHandler* GetResolveHandler();
 
     // override from KeepAlive
-    virtual int IsAlive() { return alive; }
+    virtual int IsAlive() { return alive.load(); }
 
   private:
     void* MkMergeInfo( ClientMerge* m, StrPtr& hint );
@@ -204,6 +208,6 @@ class P4GoClientUser
     P4GoProgress* progress;
     int debug;
     int apiLevel;
-    int alive;
+    std::atomic<int> alive;
     bool track;
 };
