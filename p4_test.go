@@ -29,6 +29,8 @@ package p4
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -3781,6 +3783,52 @@ func (s *PerforceTestSuite) testMapWhereOracle(mode P4MapCaseSensitivity) {
 
 func TestPerforceTestSuite(t *testing.T) {
 	suite.Run(t, new(PerforceTestSuite))
+}
+
+func TestRunWithContextDoesNotStartAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	started := false
+
+	err := runWithContext(ctx, func() error {
+		started = true
+		return nil
+	}, func() {})
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("runWithContext() error = %v", err)
+	}
+	if started {
+		t.Fatal("runWithContext() started a cancelled command")
+	}
+}
+
+func TestRunContextDoesNotEnterP4AfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	client := New()
+	defer client.Close()
+
+	_, err := client.RunContext(ctx, "info")
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunContext() error = %v", err)
+	}
+}
+
+func TestRunWithContextCancelsAnActiveCommand(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	cancelled := make(chan struct{})
+
+	err := runWithContext(ctx, func() error {
+		<-cancelled
+		return nil
+	}, func() { close(cancelled) })
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("runWithContext() error = %v", err)
+	}
 }
 
 func TestP4InputLengthRejectsOverflow(t *testing.T) {

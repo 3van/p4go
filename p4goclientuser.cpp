@@ -239,8 +239,6 @@ P4GoClientUser::Reset()
 {
     results.Reset();
     // Leave input alone.
-
-    alive = 1;
 }
 
 void

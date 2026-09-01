@@ -301,13 +301,7 @@ P4GoClientApi::ConnectOrReconnect( Error* e )
     if( e->Test() )
         return 0;
 
-    // If a handler is defined, reset the break functionality
-    // for the KeepAlive function
-
-    if( ui.GetHandler() != NULL )
-    {
-        client.SetBreak( &ui );
-    }
+    client.SetBreak( &ui );
     
     SetConnected();
     return 1;

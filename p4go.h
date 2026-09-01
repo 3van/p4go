@@ -53,6 +53,8 @@ extern "C"
     int P4Connect( P4GoClientApi* api, Error* e );
     int P4Connected( P4GoClientApi* api );
     int P4Disconnect( P4GoClientApi* api, Error* e );
+    void PrepareRun( P4GoClientApi* api );
+    void CancelRun( P4GoClientApi* api );
     void Run( P4GoClientApi* api, char* cmd, int argc, char** argv, Error* e );
 
     // Result handlers
